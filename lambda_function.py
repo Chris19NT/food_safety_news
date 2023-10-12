@@ -78,6 +78,7 @@ def send_email(subject, body, sender, recipients):
     except Exception as e:
         print("Error sending email: " + str(e))
 
+# Write selected stories to S3 JSON files
 def write_json_to_s3(bucket_name, file_name, data):
     import boto3
     import json
@@ -92,8 +93,7 @@ def write_json_to_s3(bucket_name, file_name, data):
     # Write the JSON data to S3
     s3.put_object(Bucket=bucket_name, Key=file_name, Body=json_data, ContentType='application/json')
 
-
-
+# Handle date formats from different news sources
 def parse_date(published_date_str):
     # Manual conversion of some known timezones to their UTC offsets.
     timezone_mappings = {
@@ -117,6 +117,7 @@ def parse_date(published_date_str):
 
     return None
 
+# Check if a news story is within our time limit
 def is_old(published_date_str):
     published_date = parse_date(published_date_str)
                     
@@ -131,7 +132,7 @@ def is_old(published_date_str):
         else:
             return True
 
-# Retry function
+# Retry function (remediation for potential API timeouts with openai)
 def retry_call(func, max_retries=5, backoff_factor=1, *args, **kwargs):
     for retry in range(1, max_retries + 1):
         try:
@@ -143,7 +144,7 @@ def retry_call(func, max_retries=5, backoff_factor=1, *args, **kwargs):
             jitter = random.uniform(0, 0.1 * (2 ** retry))
             time.sleep(sleep_time + jitter)
 
-
+# assess the sentiment of a news headline using gpt
 def ai_sentiment(title_in):
     response = openai.ChatCompletion.create(
 #        model="gpt-3.5-turbo",
@@ -160,6 +161,7 @@ def ai_sentiment(title_in):
     )
     return response.choices[0].message['content'].strip()
 
+# scrape an article so we can generate a summary
 def scrape_article_text(url):
     response = requests.get(url)
     soup = BeautifulSoup(response.content, "html.parser")
@@ -169,6 +171,7 @@ def scrape_article_text(url):
     article_text = article_body.get_text(separator="\n")
     return article_text.strip()
 
+# summarize scraped news text using gpt
 def ai_summarize(article_in):
     scraped_text = scrape_article_text(article_in)
     if not scraped_text:
@@ -188,7 +191,7 @@ def ai_summarize(article_in):
     )
     return response.choices[0].message['content'].strip()
 
-
+# semantic search using gpt. Check if an article is related to food safety outbreaks. Return True or False
 def ai_classify_bool(title_in):
     response = openai.ChatCompletion.create(
         model="gpt-4",
@@ -205,11 +208,11 @@ def ai_classify_bool(title_in):
     )
     return response.choices[0].message['content'].strip()
 
-
+# convert a string to boolean value
 def str_to_bool(s):
     return s.lower() == 'true'
 
-
+# check each story (entry) within each RSS feed (feed_url) for matches
 def process_feeds(feed_urls):
     message = "This is your daily automated news feed\n\n"
     counter = 0
@@ -237,9 +240,9 @@ def process_feeds(feed_urls):
                         maxretry = 5
                         for retry in range(1,maxretry +1):
                             try:
-                                mytheme = ai_classify_bool(entry.title)
+                                mytheme = ai_classify_bool(entry.title) # check if story is relevant (returns "True")
                                 break
-                            except Exception as e:
+                            except Exception as e: #timeouts can occur from openai
                                 if retry == maxretry:
                                     raise
                             print("Pause and retry")
@@ -249,6 +252,7 @@ def process_feeds(feed_urls):
                         if mytheme: # If we have a match
                             print("Match. ")
                             counter += 1
+                            # Build the email message
                             message += entry.title + "\n"
                             message += entry.published + "\n"
                             message += entry.link + "\n"
@@ -257,12 +261,11 @@ def process_feeds(feed_urls):
                             message += summary
                             message += "\n________________________________\n\n"
 
-                            #Prepare JSON data
+                            #Prepare JSON data and write to S3
                             data = {"datestamp": datetime.now().isoformat(),"topic": "Food Safety","title": entry.title,"source": feed_url['source'],"url": entry.link,"summary": summary}
                             file_name = "food/" + datetime.now().isoformat() + "-foodnews.json" # Keep this code here as there will be multiple writes in the for loop
                             print(file_name + "\n")
-#                            write_json_to_s3(bucket_name, file_name, data)
-
+                            write_json_to_s3(bucket_name, file_name, data)
                             
                 else:
                     print("Missing fields:", feed.feed.title)
@@ -280,7 +283,6 @@ def process_feeds(feed_urls):
 
 
 
-
 def lambda_handler(event, context):
 #    body = test_openai_installation()
     storycount = 0
@@ -290,7 +292,7 @@ def lambda_handler(event, context):
     recipients = [
         "valmir@myt-s.com",
         "francine.shaw@myfoodsc.com",
-#        "francine.shaw@myt-s.com",
+#        "francine.shaw@myt-s.com", #not verified
         "matheus.deleo@myt-s.com",
         "chrismicallison@gmail.com"
         ]
